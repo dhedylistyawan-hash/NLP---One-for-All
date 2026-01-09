@@ -37,6 +37,34 @@ Aplikasi web interaktif untuk berbagai tugas Natural Language Processing (NLP) m
    - Upload file CSV/TXT atau input manual
    - Export hasil ke CSV/Excel
 
+5. **🔤 Word Vector Representations**
+   - Melatih model Word2Vec dan FastText
+   - Mencari kata yang mirip (word similarity)
+   - Menghitung similarity antara dua kata
+   - Visualisasi similarity scores
+   - Upload file CSV/TXT atau input manual
+   - Export vocabulary ke CSV/Excel
+
+6. **🧠 Recurrent Neural Network (RNN)**
+   - Text Classification menggunakan LSTM
+   - Text Generation menggunakan GPT-2
+   - Visualisasi training history (accuracy & loss)
+   - Prediksi teks baru
+   - Upload file CSV dengan format text|label
+
+7. **🔄 Sequence to Sequence (Seq2Seq)**
+   - Translation (Terjemahan) antar bahasa
+   - Summarization (Ringkasan teks panjang)
+   - Question Answering (Menjawab pertanyaan dari konteks)
+   - Menggunakan model transformer pre-trained
+
+8. **⚡ Transformers**
+   - Sentiment Analysis (Analisis sentimen)
+   - Named Entity Recognition (NER)
+   - Text Classification
+   - Zero-Shot Classification
+   - Menggunakan model transformer modern dari Hugging Face
+
 ## 📦 Instalasi
 
 1. Clone atau download repository ini
@@ -60,16 +88,21 @@ Aplikasi akan terbuka di browser default Anda pada `http://localhost:8501`
 - Pandas
 - Scikit-learn
 - NLTK
-- Gensim
+- Gensim (Word2Vec, FastText)
 - BERTopic
 - Plotly
 - Sentence-transformers
+- Transformers (Hugging Face)
+- TensorFlow/Keras (untuk RNN)
+- PyTorch (untuk Transformers)
 
 ## 📝 Catatan
 
 - Untuk pertama kali menjalankan BERTopic, model embedding akan diunduh secara otomatis (membutuhkan waktu beberapa menit)
-- Pastikan koneksi internet tersedia untuk mengunduh model BERTopic
+- Model Transformers (Hugging Face) akan diunduh otomatis saat pertama kali digunakan
+- Pastikan koneksi internet tersedia untuk mengunduh model-model pre-trained
 - NLTK akan otomatis mengunduh data yang diperlukan (punkt, stopwords)
+- Untuk RNN dan Transformers, pastikan RAM cukup (minimal 4GB direkomendasikan)
 
 ## 🎯 Penggunaan
 

@@ -1,11 +1,19 @@
+import os
+# Set environment variable untuk kompatibilitas Keras 3 dengan Transformers
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import nltk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from gensim import corpora  # type: ignore
-from gensim.models import LdaModel  # type: ignore
-from bertopic import BERTopic  # type: ignore
+from gensim.models import LdaModel, Word2Vec  # type: ignore
+try:
+    from gensim.models import FastText  # type: ignore
+    FASTTEXT_AVAILABLE = True
+except ImportError:
+    FASTTEXT_AVAILABLE = False
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import io
@@ -20,11 +28,46 @@ try:
 except ImportError:
     PYLDAVIS_AVAILABLE = False
 
+try:
+    from bertopic import BERTopic  # type: ignore
+    BERTOPIC_AVAILABLE = True
+except ImportError:
+    BERTOPIC_AVAILABLE = False
+
+# Import untuk fitur baru
+try:
+    from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM, AutoModel  # type: ignore
+    from transformers import GPT2LMHeadModel, GPT2Tokenizer  # type: ignore
+    TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    TRANSFORMERS_AVAILABLE = False
+
+try:
+    import tensorflow as tf  # type: ignore
+    from tensorflow import keras  # type: ignore
+    from tensorflow.keras.models import Sequential  # type: ignore
+    from tensorflow.keras.layers import LSTM, Dense, Embedding, SimpleRNN, GRU  # type: ignore
+    from tensorflow.keras.preprocessing.text import Tokenizer  # type: ignore
+    from tensorflow.keras.preprocessing.sequence import pad_sequences  # type: ignore
+    TENSORFLOW_AVAILABLE = True
+except ImportError:
+    TENSORFLOW_AVAILABLE = False
+
 # Download NLTK data yang diperlukan
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt', quiet=True)
+
+# Download punkt_tab untuk NLTK versi terbaru
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    try:
+        nltk.download('punkt_tab', quiet=True)
+    except:
+        # Fallback jika punkt_tab tidak tersedia
+        pass
 
 try:
     nltk.data.find('corpora/stopwords')
@@ -138,7 +181,17 @@ st.markdown("---")
 st.sidebar.title("📚 Menu Program")
 program = st.sidebar.radio(
     "Pilih Program:",
-    ["🏠 Beranda", "🔍 Feature Extraction (TF-IDF)", "📑 Inverted Index", "🎯 Model LDA", "🤖 Model BERTopic"],
+    [
+        "🏠 Beranda", 
+        "🔍 Feature Extraction (TF-IDF)", 
+        "📑 Inverted Index", 
+        "🎯 Model LDA", 
+        "🤖 Model BERTopic",
+        "🔤 Word Vector Representations",
+        "🧠 Recurrent Neural Network (RNN)",
+        "🔄 Sequence to Sequence (Seq2Seq)",
+        "⚡ Transformers"
+    ],
     index=0
 )
 
@@ -792,6 +845,10 @@ elif program == "🤖 Model BERTopic":
     st.markdown('<h2 class="subheader">🤖 Model BERTopic</h2>', unsafe_allow_html=True)
     st.write("Program ini menggunakan BERTopic untuk menemukan topik-topik dalam dokumen dengan menggunakan embedding berbasis transformer.")
     
+    if not BERTOPIC_AVAILABLE:
+        st.error("❌ BERTopic tidak tersedia. Silakan install dengan: pip install bertopic sentence-transformers")
+        st.stop()
+    
     # Input parameter
     bahasa = st.selectbox(
         'Pilih Bahasa:',
@@ -986,6 +1043,843 @@ elif program == "🤖 Model BERTopic":
             st.error("❌ Silakan masukkan dokumen terlebih dahulu.")
 
 # ===========================================
+# PROGRAM 5: WORD VECTOR REPRESENTATIONS
+# ===========================================
+elif program == "🔤 Word Vector Representations":
+    st.markdown('<h2 class="subheader">🔤 Word Vector Representations</h2>', unsafe_allow_html=True)
+    st.write("Program ini melatih model Word Vector (Word2Vec, FastText) untuk menghasilkan representasi vektor dari kata-kata.")
+    
+    # Parameter
+    col1, col2 = st.columns(2)
+    with col1:
+        model_options = ['Word2Vec']
+        if FASTTEXT_AVAILABLE:
+            model_options.append('FastText')
+        model_type = st.selectbox(
+            'Pilih Model:',
+            model_options
+        )
+        if not FASTTEXT_AVAILABLE and model_type == 'FastText':
+            st.warning("⚠️ FastText tidak tersedia. Menggunakan Word2Vec sebagai alternatif.")
+    with col2:
+        vector_size = st.slider(
+            'Ukuran Vektor:',
+            min_value=50,
+            max_value=300,
+            value=100,
+            step=50
+        )
+    
+    # Upload file atau input manual
+    input_method = st.radio("Pilih metode input:", ["📝 Input Manual", "📁 Upload File (CSV/TXT)"], horizontal=True)
+    
+    doc_list = []
+    
+    if input_method == "📁 Upload File (CSV/TXT)":
+        uploaded_file = st.file_uploader("Pilih file", type=['csv', 'txt'])
+        if uploaded_file is not None:
+            doc_list, input_source = load_uploaded_file(uploaded_file)
+            if doc_list is None:
+                st.error(f"❌ {input_source}")
+            else:
+                st.success(f"✅ {input_source} berhasil dimuat! Ditemukan {len(doc_list)} dokumen.")
+    else:
+        default_docs_wv = "Saya suka belajar machine learning.\nDeep learning adalah cabang dari machine learning.\nNatural language processing menggunakan neural network.\nPython adalah bahasa pemrograman yang populer.\nData science memerlukan keterampilan analisis.\nNeural network dapat memproses data kompleks.\nMachine learning membantu dalam prediksi.\nArtificial intelligence berkembang dengan pesat.\nDeep learning menggunakan banyak layer.\nNatural language processing memahami teks."
+        documents = st.text_area(
+            'Masukkan dokumen (satu per baris):',
+            value=default_docs_wv,
+            height=200,
+            help="Masukkan setiap dokumen dalam baris terpisah"
+        )
+        if documents.strip():
+            doc_list = [doc.strip() for doc in documents.split('\n') if doc.strip()]
+    
+    if st.button('🚀 Latih Model Word Vector', type="primary"):
+        if not doc_list or len(doc_list) < 3:
+            st.warning("⚠️ Minimal diperlukan 3 dokumen untuk pelatihan Word Vector.")
+        elif doc_list:
+            with st.spinner('⏳ Sedang melatih model Word Vector...'):
+                try:
+                    # Preprocessing
+                    def preprocess_for_wv(texts):
+                        """Preprocess teks untuk Word Vector training"""
+                        processed = []
+                        for text in texts:
+                            tokens = word_tokenize(text.lower())
+                            tokens = [t for t in tokens if t.isalpha() and len(t) > 2]
+                            if tokens:
+                                processed.append(tokens)
+                        return processed
+                    
+                    processed_texts = preprocess_for_wv(doc_list)
+                    
+                    if len(processed_texts) < 2:
+                        st.error("❌ Setelah preprocessing, tidak ada cukup dokumen yang valid.")
+                    else:
+                        # Latih model
+                        if model_type == 'Word2Vec':
+                            model = Word2Vec(
+                                sentences=processed_texts,
+                                vector_size=vector_size,
+                                window=5,
+                                min_count=1,
+                                workers=4,
+                                sg=0  # 0 untuk CBOW, 1 untuk Skip-gram
+                            )
+                        else:  # FastText
+                            if not FASTTEXT_AVAILABLE:
+                                st.error("❌ FastText tidak tersedia. Silakan install dengan: pip install fasttext")
+                                st.stop()
+                            model = FastText(
+                                sentences=processed_texts,
+                                vector_size=vector_size,
+                                window=5,
+                                min_count=1,
+                                workers=4,
+                                sg=0
+                            )
+                        
+                        # Simpan model dan info ke session_state
+                        st.session_state['wv_model'] = model
+                        st.session_state['wv_model_type'] = model_type
+                        st.session_state['wv_vector_size'] = vector_size
+                        st.session_state['wv_vocab_size'] = len(model.wv.key_to_index)
+                        st.session_state['wv_doc_count'] = len(processed_texts)
+                        st.session_state['wv_model_trained'] = True
+                        
+                        st.success(f"✅ Model {model_type} berhasil dilatih!")
+                
+                except Exception as e:
+                    st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                    st.info("💡 Tips: Pastikan dokumen yang Anda masukkan cukup dan berisi teks yang bermakna.")
+    
+    # Tampilkan informasi model dan fitur search jika model sudah dilatih
+    if st.session_state.get('wv_model_trained', False):
+        model = st.session_state.get('wv_model')
+        model_type = st.session_state.get('wv_model_type', 'Word2Vec')
+        vector_size = st.session_state.get('wv_vector_size', 100)
+        vocab_size = st.session_state.get('wv_vocab_size', 0)
+        doc_count = st.session_state.get('wv_doc_count', 0)
+        
+        # Tampilkan informasi model
+        st.markdown('<h3 class="subheader">ℹ️ Informasi Model</h3>', unsafe_allow_html=True)
+        col_info1, col_info2, col_info3 = st.columns(3)
+        with col_info1:
+            st.metric("Ukuran Vektor", vector_size)
+        with col_info2:
+            st.metric("Jumlah Kata", vocab_size)
+        with col_info3:
+            st.metric("Jumlah Dokumen", doc_count)
+        
+        # Fitur: Cari kata yang mirip
+        st.markdown('<h3 class="subheader">🔍 Cari Kata yang Mirip</h3>', unsafe_allow_html=True)
+        
+        # Initialize session state untuk search word
+        if 'wv_search_word' not in st.session_state:
+            st.session_state['wv_search_word'] = ''
+        
+        search_word = st.text_input(
+            "Masukkan kata untuk mencari kata yang mirip:", 
+            value=st.session_state['wv_search_word'],
+            placeholder="contoh: machine",
+            key='wv_search_input'
+        )
+        
+        # Update session state
+        st.session_state['wv_search_word'] = search_word
+        
+        if search_word.strip():
+            search_word_lower = search_word.lower().strip()
+            if search_word_lower in model.wv.key_to_index:
+                try:
+                    similar_words = model.wv.most_similar(search_word_lower, topn=10)
+                    st.success(f"✅ Kata yang mirip dengan '{search_word}':")
+                    similar_df = pd.DataFrame(similar_words, columns=['Kata', 'Similarity Score'])
+                    st.dataframe(similar_df, use_container_width=True)
+                    
+                    # Visualisasi similarity
+                    try:
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        words = [w[0] for w in similar_words]
+                        scores = [w[1] for w in similar_words]
+                        ax.barh(words, scores, color='steelblue')
+                        ax.set_xlabel('Similarity Score', fontsize=12)
+                        ax.set_ylabel('Kata', fontsize=12)
+                        ax.set_title(f'Top 10 Kata yang Mirip dengan "{search_word}"', fontsize=14, pad=15)
+                        ax.invert_yaxis()
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        plt.close()
+                    except:
+                        pass
+                except Exception as e:
+                    st.warning(f"⚠️ Tidak dapat mencari kata yang mirip: {str(e)}")
+            else:
+                st.warning(f"⚠️ Kata '{search_word}' tidak ditemukan dalam vocabulary model.")
+        
+        # Fitur: Hitung similarity antara dua kata
+        st.markdown('<h4 class="subheader">📊 Similarity Antara Dua Kata</h4>', unsafe_allow_html=True)
+        
+        # Initialize session state untuk similarity words
+        if 'wv_word1' not in st.session_state:
+            st.session_state['wv_word1'] = ''
+        if 'wv_word2' not in st.session_state:
+            st.session_state['wv_word2'] = ''
+        
+        col_sim1, col_sim2 = st.columns(2)
+        with col_sim1:
+            word1 = st.text_input(
+                "Kata 1:", 
+                value=st.session_state['wv_word1'],
+                placeholder="contoh: machine",
+                key='wv_word1_input'
+            )
+            st.session_state['wv_word1'] = word1
+        with col_sim2:
+            word2 = st.text_input(
+                "Kata 2:", 
+                value=st.session_state['wv_word2'],
+                placeholder="contoh: learning",
+                key='wv_word2_input'
+            )
+            st.session_state['wv_word2'] = word2
+        
+        if word1.strip() and word2.strip():
+            word1_lower = word1.lower().strip()
+            word2_lower = word2.lower().strip()
+            if word1_lower in model.wv.key_to_index and word2_lower in model.wv.key_to_index:
+                try:
+                    similarity = model.wv.similarity(word1_lower, word2_lower)
+                    st.metric(f"Similarity antara '{word1}' dan '{word2}'", f"{similarity:.4f}")
+                    
+                    # Interpretasi
+                    if similarity > 0.7:
+                        st.success("✅ Kedua kata sangat mirip!")
+                    elif similarity > 0.4:
+                        st.info("ℹ️ Kedua kata cukup mirip.")
+                    else:
+                        st.warning("⚠️ Kedua kata kurang mirip.")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+            else:
+                missing = []
+                if word1_lower not in model.wv.key_to_index:
+                    missing.append(word1)
+                if word2_lower not in model.wv.key_to_index:
+                    missing.append(word2)
+                st.warning(f"⚠️ Kata berikut tidak ditemukan: {', '.join(missing)}")
+        
+        # Tampilkan vocabulary
+        with st.expander("📝 Lihat Vocabulary (Top 50 Kata)"):
+            vocab_list = list(model.wv.key_to_index.keys())[:50]
+            vocab_df = pd.DataFrame({'Kata': vocab_list})
+            st.dataframe(vocab_df, use_container_width=True)
+            st.write(f"Total vocabulary: {len(model.wv.key_to_index)} kata")
+        
+        # Export model info
+        st.markdown('<h3 class="subheader">💾 Export Hasil</h3>', unsafe_allow_html=True)
+        vocab_all = pd.DataFrame({
+            'Kata': list(model.wv.key_to_index.keys()),
+            'Index': list(model.wv.key_to_index.values())
+        })
+        col_exp1, col_exp2 = st.columns(2)
+        with col_exp1:
+            st.markdown(create_download_link(vocab_all, "word_vector_vocab.csv", "csv"), unsafe_allow_html=True)
+        with col_exp2:
+            st.markdown(create_download_link(vocab_all, "word_vector_vocab.xlsx", "excel"), unsafe_allow_html=True)
+
+# ===========================================
+# PROGRAM 6: RECURRENT NEURAL NETWORK (RNN)
+# ===========================================
+elif program == "🧠 Recurrent Neural Network (RNN)":
+    st.markdown('<h2 class="subheader">🧠 Recurrent Neural Network (RNN)</h2>', unsafe_allow_html=True)
+    st.write("Program ini melatih model RNN untuk klasifikasi teks atau generasi teks menggunakan LSTM/GRU.")
+    
+    if not TENSORFLOW_AVAILABLE:
+        st.error("❌ TensorFlow tidak tersedia. Silakan install dengan: pip install tensorflow")
+    else:
+        # Pilih task
+        task_type = st.selectbox(
+            'Pilih Tipe Task:',
+            ['Text Classification', 'Text Generation']
+        )
+        
+        if task_type == 'Text Classification':
+            st.info("ℹ️ **Text Classification**: Klasifikasi dokumen ke dalam kategori tertentu.")
+            
+            # Upload file atau input manual
+            input_method = st.radio("Pilih metode input:", ["📝 Input Manual", "📁 Upload File (CSV/TXT)"], horizontal=True)
+            
+            doc_list = []
+            labels = []
+            
+            if input_method == "📁 Upload File (CSV/TXT)":
+                uploaded_file = st.file_uploader("Pilih file CSV dengan kolom 'text' dan 'label'", type=['csv'])
+                if uploaded_file is not None:
+                    try:
+                        df = pd.read_csv(uploaded_file)
+                        if 'text' in df.columns and 'label' in df.columns:
+                            doc_list = df['text'].dropna().astype(str).tolist()
+                            labels = df['label'].dropna().astype(str).tolist()
+                            st.success(f"✅ File berhasil dimuat! Ditemukan {len(doc_list)} dokumen.")
+                        else:
+                            st.error("❌ File CSV harus memiliki kolom 'text' dan 'label'")
+                    except Exception as e:
+                        st.error(f"❌ Error membaca file: {str(e)}")
+            else:
+                st.write("**Contoh Format:** Setiap baris: `teks|label`")
+                default_data = "Saya suka belajar machine learning|positif\nDeep learning sangat menarik|positif\nSaya tidak suka matematika|negatif\nPython adalah bahasa yang mudah|positif\nPemrograman itu sulit|negatif"
+                data_input = st.text_area(
+                    'Masukkan data (format: teks|label, satu per baris):',
+                    value=default_data,
+                    height=200
+                )
+                if data_input.strip():
+                    lines = [line.strip() for line in data_input.split('\n') if line.strip()]
+                    for line in lines:
+                        if '|' in line:
+                            parts = line.split('|', 1)
+                            if len(parts) == 2:
+                                doc_list.append(parts[0].strip())
+                                labels.append(parts[1].strip())
+            
+            if st.button('🚀 Latih Model RNN', type="primary"):
+                if len(doc_list) < 3 or len(doc_list) != len(labels):
+                    st.error("❌ Minimal diperlukan 3 dokumen dengan label yang sesuai.")
+                elif doc_list:
+                    with st.spinner('⏳ Sedang melatih model RNN...'):
+                        try:
+                            # Preprocessing
+                            tokenizer = Tokenizer()
+                            tokenizer.fit_on_texts(doc_list)
+                            sequences = tokenizer.texts_to_sequences(doc_list)
+                            
+                            # Padding
+                            max_len = max(len(seq) for seq in sequences) if sequences else 100
+                            max_len = min(max_len, 200)  # Limit max length
+                            X = pad_sequences(sequences, maxlen=max_len, padding='post')
+                            
+                            # Encode labels
+                            unique_labels = sorted(list(set(labels)))
+                            label_to_idx = {label: idx for idx, label in enumerate(unique_labels)}
+                            y = np.array([label_to_idx[label] for label in labels])
+                            
+                            # Split data
+                            from sklearn.model_selection import train_test_split
+                            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                            
+                            # Build model
+                            vocab_size = len(tokenizer.word_index) + 1
+                            embedding_dim = 50
+                            
+                            model = Sequential([
+                                Embedding(vocab_size, embedding_dim, input_length=max_len),
+                                LSTM(64, return_sequences=True),
+                                LSTM(32),
+                                Dense(len(unique_labels), activation='softmax')
+                            ])
+                            
+                            model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+                            
+                            # Train model
+                            history = model.fit(
+                                X_train, y_train,
+                                epochs=10,
+                                batch_size=32,
+                                validation_data=(X_test, y_test),
+                                verbose=0
+                            )
+                            
+                            # Simpan model dan info ke session_state
+                            st.session_state['rnn_model'] = model
+                            st.session_state['rnn_tokenizer'] = tokenizer
+                            st.session_state['rnn_max_len'] = max_len
+                            st.session_state['rnn_unique_labels'] = unique_labels
+                            st.session_state['rnn_history'] = history.history
+                            st.session_state['rnn_model_trained'] = True
+                            
+                            st.success("✅ Model RNN berhasil dilatih!")
+                        
+                        except Exception as e:
+                            st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                            st.info("💡 Tips: Pastikan data memiliki format yang benar dan cukup untuk training.")
+            
+            # Tampilkan hasil training dan form prediksi jika model sudah dilatih
+            if st.session_state.get('rnn_model_trained', False):
+                model = st.session_state.get('rnn_model')
+                tokenizer = st.session_state.get('rnn_tokenizer')
+                max_len = st.session_state.get('rnn_max_len')
+                unique_labels = st.session_state.get('rnn_unique_labels')
+                history = st.session_state.get('rnn_history')
+                
+                # Tampilkan hasil
+                st.markdown('<h3 class="subheader">📊 Hasil Pelatihan</h3>', unsafe_allow_html=True)
+                
+                # Metrics
+                train_acc = history['accuracy'][-1]
+                val_acc = history['val_accuracy'][-1]
+                
+                col_met1, col_met2 = st.columns(2)
+                with col_met1:
+                    st.metric("Training Accuracy", f"{train_acc:.4f}")
+                with col_met2:
+                    st.metric("Validation Accuracy", f"{val_acc:.4f}")
+                
+                # Visualisasi training history
+                try:
+                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+                    
+                    ax1.plot(history['accuracy'], label='Training')
+                    ax1.plot(history['val_accuracy'], label='Validation')
+                    ax1.set_title('Model Accuracy', fontsize=12)
+                    ax1.set_xlabel('Epoch')
+                    ax1.set_ylabel('Accuracy')
+                    ax1.legend()
+                    
+                    ax2.plot(history['loss'], label='Training')
+                    ax2.plot(history['val_loss'], label='Validation')
+                    ax2.set_title('Model Loss', fontsize=12)
+                    ax2.set_xlabel('Epoch')
+                    ax2.set_ylabel('Loss')
+                    ax2.legend()
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    plt.close()
+                except:
+                    pass
+                
+                # Test prediction
+                st.markdown('<h3 class="subheader">🔮 Prediksi Teks Baru</h3>', unsafe_allow_html=True)
+                
+                # Initialize session state untuk test text
+                if 'rnn_test_text' not in st.session_state:
+                    st.session_state['rnn_test_text'] = ''
+                
+                test_text = st.text_input(
+                    "Masukkan teks untuk diprediksi:", 
+                    value=st.session_state['rnn_test_text'],
+                    placeholder="contoh: Saya suka belajar AI",
+                    key='rnn_test_input'
+                )
+                
+                # Update session state
+                st.session_state['rnn_test_text'] = test_text
+                
+                if test_text.strip():
+                    test_seq = tokenizer.texts_to_sequences([test_text])
+                    test_padded = pad_sequences(test_seq, maxlen=max_len, padding='post')
+                    prediction = model.predict(test_padded, verbose=0)
+                    predicted_idx = np.argmax(prediction[0])
+                    predicted_label = unique_labels[predicted_idx]
+                    confidence = prediction[0][predicted_idx]
+                    
+                    st.success(f"✅ Prediksi: **{predicted_label}** (Confidence: {confidence:.4f})")
+                    
+                    # Tampilkan semua probabilitas
+                    prob_df = pd.DataFrame({
+                        'Label': unique_labels,
+                        'Probabilitas': prediction[0]
+                    }).sort_values('Probabilitas', ascending=False)
+                    st.dataframe(prob_df, use_container_width=True)
+        
+        else:  # Text Generation
+            st.info("ℹ️ **Text Generation**: Generate teks baru berdasarkan teks yang diberikan.")
+            
+            # Input
+            seed_text = st.text_area(
+                'Masukkan seed text (teks awal):',
+                value="Machine learning adalah",
+                height=100,
+                help="Teks ini akan digunakan sebagai awal untuk generate teks"
+            )
+            
+            max_length = st.slider('Panjang teks yang di-generate:', min_value=10, max_value=100, value=50)
+            
+            if st.button('🚀 Generate Teks', type="primary"):
+                if seed_text.strip():
+                    with st.spinner('⏳ Sedang generate teks...'):
+                        try:
+                            # Simple text generation menggunakan model pre-trained
+                            if TRANSFORMERS_AVAILABLE:
+                                # Gunakan GPT-2 untuk text generation
+                                generator = pipeline("text-generation", model="gpt2", device=-1)  # device=-1 untuk CPU
+                                generated = generator(seed_text, max_length=max_length, num_return_sequences=1, temperature=0.7)
+                                
+                                st.markdown('<h3 class="subheader">📝 Teks yang Di-generate</h3>', unsafe_allow_html=True)
+                                generated_text = generated[0]['generated_text']
+                                st.write(generated_text)
+                                
+                                # Highlight seed text
+                                highlighted = generated_text.replace(
+                                    seed_text,
+                                    f"**<mark style='background-color: yellow'>{seed_text}</mark>**"
+                                )
+                                st.markdown(f"**Full Text:** {highlighted}", unsafe_allow_html=True)
+                            else:
+                                st.warning("⚠️ Transformers library tidak tersedia. Install dengan: pip install transformers torch")
+                        except Exception as e:
+                            st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                            st.info("💡 Tips: Model akan diunduh untuk pertama kali (membutuhkan koneksi internet).")
+
+# ===========================================
+# PROGRAM 7: SEQUENCE TO SEQUENCE (SEQ2SEQ)
+# ===========================================
+elif program == "🔄 Sequence to Sequence (Seq2Seq)":
+    st.markdown('<h2 class="subheader">🔄 Sequence to Sequence (Seq2Seq)</h2>', unsafe_allow_html=True)
+    st.write("Program ini menggunakan model Seq2Seq untuk translation, summarization, atau task sequence-to-sequence lainnya.")
+    
+    if not TRANSFORMERS_AVAILABLE:
+        st.error("❌ Transformers library tidak tersedia. Silakan install dengan: pip install transformers torch")
+    else:
+        # Pilih task
+        task_type = st.selectbox(
+            'Pilih Tipe Task:',
+            ['Translation (Terjemahan)', 'Summarization (Ringkasan)', 'Question Answering']
+        )
+        
+        if task_type == 'Translation (Terjemahan)':
+            st.info("ℹ️ **Translation**: Menerjemahkan teks dari satu bahasa ke bahasa lain.")
+            
+            col_lang1, col_lang2 = st.columns(2)
+            with col_lang1:
+                source_lang = st.selectbox('Bahasa Sumber:', ['English', 'Indonesian', 'French', 'German', 'Spanish'])
+            with col_lang2:
+                target_lang = st.selectbox('Bahasa Target:', ['Indonesian', 'English', 'French', 'German', 'Spanish'])
+            
+            # Model mapping
+            model_map = {
+                ('English', 'Indonesian'): 'Helsinki-NLP/opus-mt-en-id',
+                ('Indonesian', 'English'): 'Helsinki-NLP/opus-mt-id-en',
+                ('English', 'French'): 'Helsinki-NLP/opus-mt-en-fr',
+                ('French', 'English'): 'Helsinki-NLP/opus-mt-fr-en',
+            }
+            
+            model_name = model_map.get((source_lang, target_lang))
+            if not model_name:
+                model_name = 'Helsinki-NLP/opus-mt-en-id'  # Default
+                st.info(f"ℹ️ Menggunakan model default untuk {source_lang} → {target_lang}")
+            
+            text_to_translate = st.text_area(
+                'Masukkan teks yang ingin diterjemahkan:',
+                value="Hello, how are you?" if source_lang == 'English' else "Halo, apa kabar?",
+                height=150
+            )
+            
+            if st.button('🌐 Terjemahkan', type="primary"):
+                if text_to_translate.strip():
+                    with st.spinner('⏳ Sedang menerjemahkan... (Model akan diunduh untuk pertama kali)'):
+                        try:
+                            translator = pipeline("translation", model=model_name, device=-1)
+                            result = translator(text_to_translate)
+                            translated_text = result[0]['translation_text']
+                            
+                            st.markdown('<h3 class="subheader">🌐 Hasil Terjemahan</h3>', unsafe_allow_html=True)
+                            col_trans1, col_trans2 = st.columns(2)
+                            with col_trans1:
+                                st.write(f"**{source_lang}:**")
+                                st.write(text_to_translate)
+                            with col_trans2:
+                                st.write(f"**{target_lang}:**")
+                                st.success(translated_text)
+                        except Exception as e:
+                            st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                            st.info("💡 Tips: Pastikan koneksi internet aktif. Model akan diunduh untuk pertama kali.")
+        
+        elif task_type == 'Summarization (Ringkasan)':
+            st.info("ℹ️ **Summarization**: Membuat ringkasan dari teks yang panjang.")
+            
+            text_to_summarize = st.text_area(
+                'Masukkan teks yang ingin diringkas:',
+                value="Machine learning is a subset of artificial intelligence that focuses on the development of algorithms and statistical models that enable computer systems to improve their performance on a specific task through experience. Instead of being explicitly programmed to perform a task, machine learning systems learn from data. Deep learning, a subset of machine learning, uses neural networks with multiple layers to analyze various factors of data. Natural language processing is another important field that combines machine learning with linguistics to help computers understand human language.",
+                height=200,
+                help="Masukkan teks yang cukup panjang untuk diringkas"
+            )
+            
+            max_length = st.slider('Panjang maksimal ringkasan:', min_value=30, max_value=150, value=50)
+            min_length = st.slider('Panjang minimal ringkasan:', min_value=10, max_value=50, value=20)
+            
+            if st.button('📝 Buat Ringkasan', type="primary"):
+                if text_to_summarize.strip():
+                    with st.spinner('⏳ Sedang membuat ringkasan... (Model akan diunduh untuk pertama kali)'):
+                        try:
+                            summarizer = pipeline("summarization", model="facebook/bart-large-cnn", device=-1)
+                            result = summarizer(text_to_summarize, max_length=max_length, min_length=min_length, do_sample=False)
+                            summary = result[0]['summary_text']
+                            
+                            st.markdown('<h3 class="subheader">📝 Ringkasan</h3>', unsafe_allow_html=True)
+                            st.success(summary)
+                            
+                            # Perbandingan panjang
+                            col_comp1, col_comp2 = st.columns(2)
+                            with col_comp1:
+                                st.metric("Panjang Teks Asli", f"{len(text_to_summarize.split())} kata")
+                            with col_comp2:
+                                st.metric("Panjang Ringkasan", f"{len(summary.split())} kata")
+                        except Exception as e:
+                            st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                            st.info("💡 Tips: Pastikan koneksi internet aktif. Model akan diunduh untuk pertama kali.")
+        
+        else:  # Question Answering
+            st.info("ℹ️ **Question Answering**: Menjawab pertanyaan berdasarkan konteks yang diberikan.")
+            
+            context = st.text_area(
+                'Masukkan konteks (teks yang akan dijadikan referensi):',
+                value="Machine learning is a method of data analysis that automates analytical model building. It is a branch of artificial intelligence based on the idea that systems can learn from data, identify patterns and make decisions with minimal human intervention.",
+                height=150
+            )
+            
+            question = st.text_input(
+                'Masukkan pertanyaan:',
+                value="What is machine learning?",
+                placeholder="contoh: What is machine learning?"
+            )
+            
+            if st.button('❓ Jawab Pertanyaan', type="primary"):
+                if context.strip() and question.strip():
+                    with st.spinner('⏳ Sedang mencari jawaban... (Model akan diunduh untuk pertama kali)'):
+                        try:
+                            qa_pipeline = pipeline("question-answering", device=-1)
+                            result = qa_pipeline(question=question, context=context)
+                            
+                            st.markdown('<h3 class="subheader">❓ Jawaban</h3>', unsafe_allow_html=True)
+                            st.success(f"**{result['answer']}**")
+                            st.metric("Confidence Score", f"{result['score']:.4f}")
+                            
+                            # Highlight answer dalam context
+                            start_idx = result['start']
+                            end_idx = result['end']
+                            highlighted_context = (
+                                context[:start_idx] +
+                                f"**<mark style='background-color: yellow'>{context[start_idx:end_idx]}</mark>**" +
+                                context[end_idx:]
+                            )
+                            st.markdown(f"**Konteks:** {highlighted_context}", unsafe_allow_html=True)
+                        except Exception as e:
+                            st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                            st.info("💡 Tips: Pastikan koneksi internet aktif. Model akan diunduh untuk pertama kali.")
+
+# ===========================================
+# PROGRAM 8: TRANSFORMERS
+# ===========================================
+elif program == "⚡ Transformers":
+    st.markdown('<h2 class="subheader">⚡ Transformers</h2>', unsafe_allow_html=True)
+    st.write("Program ini menggunakan model Transformer untuk berbagai task NLP seperti sentiment analysis, named entity recognition, dan text classification.")
+    
+    if not TRANSFORMERS_AVAILABLE:
+        st.error("❌ Transformers library tidak tersedia. Silakan install dengan: pip install transformers torch")
+    else:
+        # Pilih task
+        task_type = st.selectbox(
+            'Pilih Tipe Task:',
+            ['Sentiment Analysis', 'Named Entity Recognition (NER)', 'Text Classification', 'Zero-Shot Classification']
+        )
+        
+        # Upload file atau input manual
+        input_method = st.radio("Pilih metode input:", ["📝 Input Manual", "📁 Upload File (CSV/TXT)"], horizontal=True)
+        
+        doc_list = []
+        
+        if input_method == "📁 Upload File (CSV/TXT)":
+            uploaded_file = st.file_uploader("Pilih file", type=['csv', 'txt'])
+            if uploaded_file is not None:
+                doc_list, input_source = load_uploaded_file(uploaded_file)
+                if doc_list is None:
+                    st.error(f"❌ {input_source}")
+                else:
+                    st.success(f"✅ {input_source} berhasil dimuat! Ditemukan {len(doc_list)} dokumen.")
+        else:
+            if task_type == 'Sentiment Analysis':
+                default_text = "I love this product! It's amazing."
+            elif task_type == 'Named Entity Recognition (NER)':
+                default_text = "Barack Obama was born in Hawaii. He worked at the White House."
+            elif task_type == 'Text Classification':
+                default_text = "This is a technology article about artificial intelligence."
+            else:
+                default_text = "This is a great movie with excellent acting."
+            
+            text_input = st.text_area(
+                'Masukkan teks:',
+                value=default_text,
+                height=150
+            )
+            if text_input.strip():
+                doc_list = [text_input.strip()]
+        
+        if st.button('🚀 Proses dengan Transformer', type="primary"):
+            if not doc_list:
+                st.error("❌ Silakan masukkan teks terlebih dahulu.")
+            else:
+                with st.spinner('⏳ Sedang memproses... (Model akan diunduh untuk pertama kali jika diperlukan)'):
+                    try:
+                        if task_type == 'Sentiment Analysis':
+                            classifier = pipeline("sentiment-analysis", device=-1)
+                            results = []
+                            for doc in doc_list:
+                                result = classifier(doc)
+                                results.append({
+                                    'Teks': doc,
+                                    'Label': result[0]['label'],
+                                    'Score': result[0]['score']
+                                })
+                            
+                            results_df = pd.DataFrame(results)
+                            st.markdown('<h3 class="subheader">📊 Hasil Sentiment Analysis</h3>', unsafe_allow_html=True)
+                            st.dataframe(results_df, use_container_width=True)
+                            
+                            # Visualisasi
+                            try:
+                                label_counts = results_df['Label'].value_counts()
+                                fig, ax = plt.subplots(figsize=(8, 6))
+                                label_counts.plot(kind='bar', ax=ax, color=['green', 'red', 'blue'])
+                                ax.set_xlabel('Sentiment', fontsize=12)
+                                ax.set_ylabel('Jumlah', fontsize=12)
+                                ax.set_title('Distribusi Sentiment', fontsize=14, pad=15)
+                                plt.xticks(rotation=45)
+                                plt.tight_layout()
+                                st.pyplot(fig)
+                                plt.close()
+                            except:
+                                pass
+                            
+                            # Export
+                            st.markdown('<h3 class="subheader">💾 Export Hasil</h3>', unsafe_allow_html=True)
+                            col_exp1, col_exp2 = st.columns(2)
+                            with col_exp1:
+                                st.markdown(create_download_link(results_df, "sentiment_analysis.csv", "csv"), unsafe_allow_html=True)
+                            with col_exp2:
+                                st.markdown(create_download_link(results_df, "sentiment_analysis.xlsx", "excel"), unsafe_allow_html=True)
+                        
+                        elif task_type == 'Named Entity Recognition (NER)':
+                            ner_pipeline = pipeline("ner", aggregation_strategy="simple", device=-1)
+                            all_results = []
+                            for doc in doc_list:
+                                entities = ner_pipeline(doc)
+                                for entity in entities:
+                                    all_results.append({
+                                        'Teks': doc[:50] + '...' if len(doc) > 50 else doc,
+                                        'Entity': entity['word'],
+                                        'Label': entity['entity_group'],
+                                        'Score': entity['score']
+                                    })
+                            
+                            if all_results:
+                                ner_df = pd.DataFrame(all_results)
+                                st.markdown('<h3 class="subheader">📊 Hasil Named Entity Recognition</h3>', unsafe_allow_html=True)
+                                st.dataframe(ner_df, use_container_width=True)
+                                
+                                # Visualisasi
+                                try:
+                                    label_counts = ner_df['Label'].value_counts()
+                                    fig, ax = plt.subplots(figsize=(10, 6))
+                                    label_counts.plot(kind='barh', ax=ax, color='coral')
+                                    ax.set_xlabel('Jumlah', fontsize=12)
+                                    ax.set_ylabel('Entity Type', fontsize=12)
+                                    ax.set_title('Distribusi Entity Types', fontsize=14, pad=15)
+                                    ax.invert_yaxis()
+                                    plt.tight_layout()
+                                    st.pyplot(fig)
+                                    plt.close()
+                                except:
+                                    pass
+                                
+                                # Export
+                                st.markdown('<h3 class="subheader">💾 Export Hasil</h3>', unsafe_allow_html=True)
+                                col_exp1, col_exp2 = st.columns(2)
+                                with col_exp1:
+                                    st.markdown(create_download_link(ner_df, "ner_results.csv", "csv"), unsafe_allow_html=True)
+                                with col_exp2:
+                                    st.markdown(create_download_link(ner_df, "ner_results.xlsx", "excel"), unsafe_allow_html=True)
+                            else:
+                                st.info("ℹ️ Tidak ada named entity yang ditemukan dalam teks.")
+                        
+                        elif task_type == 'Text Classification':
+                            # Zero-shot classification untuk text classification
+                            classifier = pipeline("zero-shot-classification", device=-1)
+                            candidate_labels = st.text_input(
+                                "Masukkan kategori (pisahkan dengan koma):",
+                                value="technology, sports, politics, entertainment, science"
+                            )
+                            
+                            if candidate_labels.strip():
+                                labels = [l.strip() for l in candidate_labels.split(',')]
+                                results = []
+                                for doc in doc_list:
+                                    result = classifier(doc, labels)
+                                    results.append({
+                                        'Teks': doc,
+                                        'Predicted Label': result['labels'][0],
+                                        'Score': result['scores'][0]
+                                    })
+                                
+                                results_df = pd.DataFrame(results)
+                                st.markdown('<h3 class="subheader">📊 Hasil Text Classification</h3>', unsafe_allow_html=True)
+                                st.dataframe(results_df, use_container_width=True)
+                                
+                                # Tampilkan semua scores untuk teks pertama
+                                if doc_list:
+                                    first_result = classifier(doc_list[0], labels)
+                                    scores_df = pd.DataFrame({
+                                        'Label': first_result['labels'],
+                                        'Score': first_result['scores']
+                                    })
+                                    st.markdown('<h4 class="subheader">📈 Probabilitas Semua Kategori</h4>', unsafe_allow_html=True)
+                                    st.dataframe(scores_df, use_container_width=True)
+                                
+                                # Export
+                                st.markdown('<h3 class="subheader">💾 Export Hasil</h3>', unsafe_allow_html=True)
+                                col_exp1, col_exp2 = st.columns(2)
+                                with col_exp1:
+                                    st.markdown(create_download_link(results_df, "text_classification.csv", "csv"), unsafe_allow_html=True)
+                                with col_exp2:
+                                    st.markdown(create_download_link(results_df, "text_classification.xlsx", "excel"), unsafe_allow_html=True)
+                        
+                        else:  # Zero-Shot Classification
+                            text_to_classify = doc_list[0] if doc_list else ""
+                            candidate_labels = st.text_input(
+                                "Masukkan kategori untuk klasifikasi (pisahkan dengan koma):",
+                                value="positive, negative, neutral"
+                            )
+                            
+                            if candidate_labels.strip() and text_to_classify:
+                                labels = [l.strip() for l in candidate_labels.split(',')]
+                                classifier = pipeline("zero-shot-classification", device=-1)
+                                result = classifier(text_to_classify, labels)
+                                
+                                st.markdown('<h3 class="subheader">📊 Hasil Zero-Shot Classification</h3>', unsafe_allow_html=True)
+                                
+                                # Tampilkan hasil
+                                st.write(f"**Teks:** {text_to_classify}")
+                                st.success(f"**Prediksi:** {result['labels'][0]} (Score: {result['scores'][0]:.4f})")
+                                
+                                # Tampilkan semua scores
+                                scores_df = pd.DataFrame({
+                                    'Label': result['labels'],
+                                    'Score': result['scores']
+                                })
+                                st.dataframe(scores_df, use_container_width=True)
+                                
+                                # Visualisasi
+                                try:
+                                    fig, ax = plt.subplots(figsize=(8, 6))
+                                    scores_df.plot(x='Label', y='Score', kind='barh', ax=ax, color='steelblue')
+                                    ax.set_xlabel('Score', fontsize=12)
+                                    ax.set_ylabel('Label', fontsize=12)
+                                    ax.set_title('Zero-Shot Classification Scores', fontsize=14, pad=15)
+                                    ax.invert_yaxis()
+                                    plt.tight_layout()
+                                    st.pyplot(fig)
+                                    plt.close()
+                                except:
+                                    pass
+                        
+                        st.success("✅ Proses selesai!")
+                    
+                    except Exception as e:
+                        st.error(f"❌ Terjadi kesalahan: {str(e)}")
+                        st.info("💡 Tips: Pastikan koneksi internet aktif. Model akan diunduh untuk pertama kali (membutuhkan waktu beberapa menit).")
+
+# ===========================================
 # HALAMAN BERANDA
 # ===========================================
 else:
@@ -1002,19 +1896,51 @@ else:
     1. **🔍 Feature Extraction (TF-IDF)**
        - Mengekstraksi fitur dari dokumen menggunakan metode TF-IDF
        - Menghasilkan matriks TF-IDF yang menunjukkan pentingnya setiap kata dalam setiap dokumen
+       - Visualisasi: Heatmap, Word Cloud, Bar Chart
+       - Upload file dan Export hasil
        
     2. **📑 Inverted Index**
        - Membuat struktur data inverted index sederhana
        - Memetakan setiap kata ke dokumen-dokumen yang mengandung kata tersebut
+       - Fitur pencarian: Pencarian kata tunggal dan multi-kata (AND/OR)
+       - Upload file dan Export hasil
        
     3. **🎯 Model LDA (Latent Dirichlet Allocation)**
        - Melatih model LDA untuk menemukan topik-topik tersembunyi dalam dokumen
        - Mendukung dataset Bahasa Indonesia dan Inggris
+       - Visualisasi interaktif pyLDAvis
+       - Upload file dan Export hasil
        
     4. **🤖 Model BERTopic**
        - Menggunakan BERTopic untuk analisis topik dengan embedding transformer
        - Mendukung dataset Bahasa Indonesia dan Inggris
        - Menyediakan visualisasi interaktif
+       - Upload file dan Export hasil
+       
+    5. **🔤 Word Vector Representations**
+       - Melatih model Word2Vec dan FastText untuk representasi vektor kata
+       - Mencari kata yang mirip (similarity)
+       - Menghitung similarity antara dua kata
+       - Upload file dan Export hasil
+       
+    6. **🧠 Recurrent Neural Network (RNN)**
+       - Text Classification menggunakan LSTM
+       - Text Generation menggunakan model pre-trained
+       - Visualisasi training history
+       - Prediksi teks baru
+       
+    7. **🔄 Sequence to Sequence (Seq2Seq)**
+       - Translation (Terjemahan) antar bahasa
+       - Summarization (Ringkasan teks)
+       - Question Answering (Menjawab pertanyaan)
+       - Menggunakan model transformer pre-trained
+       
+    8. **⚡ Transformers**
+       - Sentiment Analysis
+       - Named Entity Recognition (NER)
+       - Text Classification
+       - Zero-Shot Classification
+       - Menggunakan model transformer modern
     
     ### 🚀 Cara Menggunakan
     
